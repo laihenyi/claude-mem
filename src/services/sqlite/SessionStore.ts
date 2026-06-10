@@ -40,10 +40,17 @@ export class SessionStore {
       }
       this.db = new Database(dbPathOrDb);
 
+      const SQLITE_MMAP_SIZE_BYTES = 256 * 1024 * 1024;
+      const SQLITE_CACHE_SIZE_PAGES = 10_000;
+      const SQLITE_BUSY_TIMEOUT_MS = 5000;
+
       this.db.run('PRAGMA journal_mode = WAL');
       this.db.run('PRAGMA synchronous = NORMAL');
       this.db.run('PRAGMA foreign_keys = ON');
-      this.db.run('PRAGMA journal_size_limit = 4194304'); 
+      this.db.run('PRAGMA temp_store = memory');
+      this.db.run(`PRAGMA busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+      this.db.run(`PRAGMA mmap_size = ${SQLITE_MMAP_SIZE_BYTES}`);
+      this.db.run(`PRAGMA cache_size = ${SQLITE_CACHE_SIZE_PAGES}`);
     }
 
     this.initializeSchema();
