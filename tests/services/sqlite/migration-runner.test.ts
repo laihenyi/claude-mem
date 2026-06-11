@@ -136,6 +136,7 @@ describe('MigrationRunner', () => {
       expect(versions).toContain(30);  
       expect(versions).toContain(33);
       expect(versions).toContain(34);
+      expect(versions).toContain(35);
     });
 
     it('should create server-owned storage tables without changing legacy readability', () => {
@@ -215,6 +216,10 @@ describe('MigrationRunner', () => {
       `).run(sessionId, Date.now());
       db.prepare(`
         INSERT INTO pending_messages (session_db_id, content_session_id, message_type, status, created_at_epoch)
+        VALUES (?, 'legacy-content', 'observation', 'processing', ?)
+      `).run(sessionId, Date.now());
+      db.prepare(`
+        INSERT INTO pending_messages (session_db_id, content_session_id, message_type, status, created_at_epoch)
         VALUES (?, 'legacy-content', 'observation', 'failed', ?)
       `).run(sessionId, Date.now());
 
@@ -222,7 +227,9 @@ describe('MigrationRunner', () => {
       runner.runAllMigrations();
 
       const pendingRows = db.prepare('SELECT COUNT(*) AS count FROM pending_messages').get() as { count: number };
-      expect(pendingRows.count).toBe(1);
+      expect(pendingRows.count).toBe(2);
+      const remainingStatuses = db.prepare('SELECT status FROM pending_messages ORDER BY id').all() as Array<{ status: string }>;
+      expect(remainingStatuses.map(row => row.status)).toEqual(['pending', 'processing']);
       const columns = getColumns(db, 'pending_messages').map(column => column.name);
       expect(columns).not.toContain('retry_count');
       expect(columns).not.toContain('completed_at_epoch');
@@ -232,6 +239,94 @@ describe('MigrationRunner', () => {
         INSERT INTO pending_messages (session_db_id, content_session_id, message_type, status, created_at_epoch)
         VALUES (?, 'legacy-content', 'observation', 'failed', ?)
       `).run(sessionId, Date.now())).toThrow();
+    });
+
+    it('should normalize legacy prompts and clear completed-session duplicates in migration 35', () => {
+      db.run(`
+        CREATE TABLE IF NOT EXISTS schema_versions (
+          id INTEGER PRIMARY KEY,
+          version INTEGER UNIQUE NOT NULL,
+          applied_at TEXT NOT NULL
+        )
+      `);
+
+      db.run(`
+        CREATE TABLE sdk_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          content_session_id TEXT UNIQUE NOT NULL,
+          memory_session_id TEXT UNIQUE,
+          project TEXT NOT NULL,
+          platform_source TEXT NOT NULL DEFAULT 'claude',
+          user_prompt TEXT,
+          started_at TEXT NOT NULL,
+          started_at_epoch INTEGER NOT NULL,
+          completed_at TEXT,
+          completed_at_epoch INTEGER,
+          status TEXT CHECK(status IN ('active', 'completed', 'failed')) NOT NULL DEFAULT 'active',
+          worker_port INTEGER,
+          prompt_counter INTEGER DEFAULT 0,
+          custom_title TEXT
+        )
+      `);
+
+      db.run(`
+        CREATE TABLE user_prompts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          content_session_id TEXT NOT NULL,
+          prompt_number INTEGER NOT NULL,
+          prompt_text TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_at_epoch INTEGER NOT NULL,
+          FOREIGN KEY(content_session_id) REFERENCES sdk_sessions(content_session_id) ON DELETE CASCADE
+        )
+      `);
+
+      const now = new Date().toISOString();
+      const nowEpoch = Date.now();
+      const legacyPrompt = `<claude-mem-context>hidden</claude-mem-context>${'A'.repeat(8_000)}`;
+      db.prepare('INSERT INTO schema_versions (version, applied_at) VALUES (?, ?)').run(34, now);
+      db.prepare(`
+        INSERT INTO sdk_sessions (content_session_id, project, user_prompt, started_at, started_at_epoch, completed_at, completed_at_epoch, status, platform_source)
+        VALUES ('completed-content', 'legacy-project', ?, ?, ?, ?, ?, 'completed', 'claude')
+      `).run(legacyPrompt, now, nowEpoch, now, nowEpoch);
+      db.prepare(`
+        INSERT INTO sdk_sessions (content_session_id, project, user_prompt, started_at, started_at_epoch, status, platform_source)
+        VALUES ('active-content', 'legacy-project', ?, ?, ?, 'active', 'claude')
+      `).run(legacyPrompt, now, nowEpoch + 1);
+      db.prepare(`
+        INSERT INTO user_prompts (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch)
+        VALUES ('completed-content', 1, ?, ?, ?)
+      `).run(legacyPrompt, now, nowEpoch);
+      db.prepare(`
+        INSERT INTO user_prompts (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch)
+        VALUES ('active-content', 1, ?, ?, ?)
+      `).run(legacyPrompt, now, nowEpoch + 1);
+
+      const runner = new MigrationRunner(db);
+      runner.runAllMigrations();
+
+      const completed = db.prepare(`
+        SELECT user_prompt
+        FROM sdk_sessions
+        WHERE content_session_id = 'completed-content'
+      `).get() as { user_prompt: string | null };
+      const active = db.prepare(`
+        SELECT user_prompt
+        FROM sdk_sessions
+        WHERE content_session_id = 'active-content'
+      `).get() as { user_prompt: string | null };
+      const prompts = db.prepare(`
+        SELECT prompt_text
+        FROM user_prompts
+        ORDER BY content_session_id
+      `).all() as Array<{ prompt_text: string }>;
+      const versions = getSchemaVersions(db);
+
+      expect(completed.user_prompt).toBeNull();
+      expect(active.user_prompt).toBe(legacyPrompt);
+      expect(prompts.every(prompt => prompt.prompt_text.length === 4000)).toBe(true);
+      expect(prompts.every(prompt => prompt.prompt_text.startsWith('<claude-mem-context>'))).toBe(false);
+      expect(versions).toContain(35);
     });
   });
 
