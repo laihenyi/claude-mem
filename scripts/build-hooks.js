@@ -252,6 +252,7 @@ async function buildHooks() {
         '@derekstride/tree-sitter-sql': '^0.3.11',
         '@tree-sitter-grammars/tree-sitter-markdown': '^0.3.2',
         'shell-quote': '^1.8.3',
+        'posthog-node': '^5.36.15',
       },
       overrides: {
         'tree-sitter': '^0.25.0'
@@ -297,6 +298,8 @@ async function buildHooks() {
         'ollama',
         '@chroma-core/default-embed',
         'onnxruntime-node',
+        // Worker telemetry imports posthog-node at runtime, so keep it external
+        // but ship it in plugin/package.json for clean-room installs (#2849).
         'posthog-node',
         // better-auth (~3.7MB) is only reachable through BetterAuthRoutes' request-time
         // dynamic import('better-auth/node') / import('./auth.js'). esbuild otherwise

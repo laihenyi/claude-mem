@@ -10,10 +10,16 @@ type BusyTimeoutRow = {
 };
 
 const SQLITE_BUSY_TIMEOUT_MS = 5000;
+const SQLITE_JOURNAL_SIZE_LIMIT_BYTES = 4 * 1024 * 1024;
 
 function getBusyTimeout(db: Database): number {
   const row = db.prepare('PRAGMA busy_timeout').get() as BusyTimeoutRow;
   return Number(row?.busy_timeout ?? row?.timeout ?? Object.values(row ?? {})[0]);
+}
+
+function getJournalSizeLimit(db: Database): number {
+  const row = db.prepare('PRAGMA journal_size_limit').get() as Record<string, number | string> | null;
+  return Number(row ? Object.values(row)[0] : NaN);
 }
 
 describe('Database PRAGMAs', () => {
@@ -87,6 +93,32 @@ describe('Database PRAGMAs', () => {
       expect(getBusyTimeout(store.db)).toBe(SQLITE_BUSY_TIMEOUT_MS);
     } finally {
       store.close();
+    }
+  });
+
+  it('caps WAL growth on the worker shared connection path', async () => {
+    const originalDataDir = process.env.CLAUDE_MEM_DATA_DIR;
+    const testDataDir = mkdtempSync(join(tmpdir(), 'claude-mem-worker-db-'));
+    process.env.CLAUDE_MEM_DATA_DIR = testDataDir;
+
+    const { DatabaseManager } = await import('../../../src/services/worker/DatabaseManager.js');
+    const manager = new DatabaseManager();
+
+    try {
+      await manager.initialize();
+      expect(getJournalSizeLimit(manager.getConnection())).toBe(SQLITE_JOURNAL_SIZE_LIMIT_BYTES);
+      expect(getBusyTimeout(manager.getConnection())).toBe(SQLITE_BUSY_TIMEOUT_MS);
+    } finally {
+      await manager.close();
+      if (process.platform === 'win32') {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      if (originalDataDir === undefined) {
+        delete process.env.CLAUDE_MEM_DATA_DIR;
+      } else {
+        process.env.CLAUDE_MEM_DATA_DIR = originalDataDir;
+      }
+      rmSync(testDataDir, { recursive: true, force: true });
     }
   });
 });
