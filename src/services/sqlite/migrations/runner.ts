@@ -8,6 +8,7 @@ import {
 } from '../../../types/database.js';
 import { DEFAULT_PLATFORM_SOURCE } from '../../../shared/platform-source.js';
 import { ensureServerStorageSchema, SERVER_STORAGE_SCHEMA_VERSION } from '../../../storage/sqlite/schema.js';
+import { applyLegacyPromptBloatMaintenance } from '../maintenance.js';
 
 export class MigrationRunner {
   constructor(private db: Database) {}
@@ -38,6 +39,7 @@ export class MigrationRunner {
     this.dropWorkerPidColumn();
     this.createServerOwnedTables();
     this.rebuildPendingMessagesForFinalQueueSchema();
+    applyLegacyPromptBloatMaintenance(this.db);
   }
 
   private initializeSchema(): void {
