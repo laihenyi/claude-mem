@@ -189,6 +189,17 @@ describe('Plugin Distribution - package.json Files Field', () => {
   });
 });
 
+describe('Plugin Distribution - Runtime Dependency Closure', () => {
+  it('ships posthog-node when the worker bundle keeps it external (#2849)', () => {
+    const buildScriptPath = path.join(projectRoot, 'scripts/build-hooks.js');
+    const buildScript = readFileSync(buildScriptPath, 'utf-8');
+    const pluginPackage = readJson('plugin/package.json');
+
+    expect(buildScript).toContain("'posthog-node'");
+    expect(pluginPackage.dependencies['posthog-node']).toBe('^5.36.15');
+  });
+});
+
 describe('Plugin Distribution - Build Script Verification', () => {
   it('should verify distribution files in build-hooks.js', () => {
     const buildScriptPath = path.join(projectRoot, 'scripts/build-hooks.js');
@@ -383,8 +394,11 @@ describe('Spawn-Contract Templating - Rule A shell resolution matrix', () => {
     try {
       for (const { command } of claudeCommands()) {
         const { stdout } = shellEval(instrument(command), { HOME: home });
-        // ls -dt yields a trailing slash; the hook trims it via _R="${_R%/}".
-        expect(stdout).toContain(`RESOLVED=${cacheRoot}`);
+        // Bash can surface the HOME-derived path as POSIX (/tmp/...) even when
+        // the test created the temp root via Windows path APIs.
+        expect(stdout.replace(/\\/g, '/')).toContain(
+          '/.claude/plugins/cache/thedotmack/claude-mem/99.0.0'
+        );
       }
     } finally {
       rmSync(home, { recursive: true, force: true });
