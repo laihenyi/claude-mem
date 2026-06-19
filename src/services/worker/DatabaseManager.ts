@@ -2,6 +2,7 @@
 import { Database } from 'bun:sqlite';
 import { SessionStore } from '../sqlite/SessionStore.js';
 import { SessionSearch } from '../sqlite/SessionSearch.js';
+import { enableIncrementalAutoVacuumIfFresh } from '../sqlite/Database.js';
 import { ChromaSync } from '../sync/ChromaSync.js';
 import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH, DB_PATH } from '../../shared/paths.js';
@@ -22,6 +23,7 @@ export class DatabaseManager {
     const SQLITE_BUSY_TIMEOUT_MS = 5000;
     const SQLITE_JOURNAL_SIZE_LIMIT_BYTES = 4 * 1024 * 1024;
 
+    enableIncrementalAutoVacuumIfFresh(this.db);
     this.db.run('PRAGMA journal_mode = WAL');
     this.db.run('PRAGMA synchronous = NORMAL');
     this.db.run('PRAGMA foreign_keys = ON');

@@ -16,6 +16,34 @@ export interface Migration {
 
 let dbInstance: Database | null = null;
 
+/**
+ * Opt a *brand-new* database into incremental auto-vacuum before any table
+ * exists. SQLite can only switch auto_vacuum away from NONE on an empty
+ * database (otherwise a full VACUUM is required), so we gate on an empty
+ * sqlite_master and must run this before `PRAGMA journal_mode = WAL` and schema
+ * creation — the first WAL-mode write locks in whatever mode is set here.
+ *
+ * Existing NONE databases are deliberately left untouched. The bloat
+ * maintenance pass (maintenance.ts) reads `PRAGMA auto_vacuum` and takes the
+ * cheap incremental_vacuum branch only when it reports 2. Flipping the pragma
+ * on a legacy NONE database makes it *report* 2 without materializing the
+ * pointer-map pages, which would turn incremental_vacuum into a no-op and
+ * strand existing free pages — so leaving them at 0 preserves the correct
+ * full-VACUUM reclaim path for those databases.
+ *
+ * Returns true when incremental mode was enabled (fresh DB), false otherwise.
+ */
+export function enableIncrementalAutoVacuumIfFresh(db: Database): boolean {
+  const { tableCount } = db
+    .query("SELECT COUNT(*) AS tableCount FROM sqlite_master WHERE type = 'table'")
+    .get() as { tableCount: number };
+  if (tableCount > 0) {
+    return false;
+  }
+  db.run('PRAGMA auto_vacuum = INCREMENTAL');
+  return true;
+}
+
 export class ClaudeMemDatabase {
   public db: Database;
 
@@ -26,6 +54,7 @@ export class ClaudeMemDatabase {
 
     this.db = ClaudeMemDatabase.openWithSchemaRepair(dbPath);
 
+    enableIncrementalAutoVacuumIfFresh(this.db);
     this.db.run('PRAGMA journal_mode = WAL');
     this.db.run('PRAGMA synchronous = NORMAL');
     this.db.run('PRAGMA foreign_keys = ON');
@@ -105,6 +134,7 @@ export class DatabaseManager {
 
     this.db = new Database(DB_PATH, { create: true, readwrite: true });
 
+    enableIncrementalAutoVacuumIfFresh(this.db);
     this.db.run('PRAGMA journal_mode = WAL');
     this.db.run('PRAGMA synchronous = NORMAL');
     this.db.run('PRAGMA foreign_keys = ON');
